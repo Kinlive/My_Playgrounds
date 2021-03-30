@@ -289,9 +289,9 @@ func nestQueue5() {
     }
     print("end at thread \(Thread.current)")
 }
-for _ in 0 ..< 5 {
-    nestQueue5()
-}
+//for _ in 0 ..< 5 {
+//    nestQueue5()
+//}
 
 func nestQueue6() {
     print("\n=============\(#function)================")
@@ -313,4 +313,134 @@ func nestQueue6() {
 //for _ in 0 ..< 5 {
 //    nestQueue6()
 //}
+
+func nestQueue7() {
+    print("\n=============\(#function)================")
+    print("start at thread \(Thread.current)")
+    
+    let queue = DispatchQueue.main
+    queue.sync { // 因方法本身就是執行在主執行緒上，而又自行呼叫主執行緒進行同步執行，導致sync的任務排在方法執行完後，造成互相等待鎖死。
+        print("task1 thread at \(Thread.current)")
+        queue.async { // 外部先鎖死，因此task1 也不會執行。
+            //sleep(2)
+            print("task2 thread at \(Thread.current)")
+        }
+        
+        print("task3 thread at \(Thread.current)")
+    }
+    print("end at thread \(Thread.current)")
+}
+//nestQueue7()
+func nestQueue8() {
+    print("\n=============\(#function)================")
+    print("start at thread \(Thread.current)")
+    
+    let queue = DispatchQueue.main
+    queue.sync { // 同 nestQueue7的狀況，直接在此先鎖死。
+        print("task1 thread at \(Thread.current)")
+        queue.sync {
+            //sleep(2)
+            print("task2 thread at \(Thread.current)")
+        }
+        
+        print("task3 thread at \(Thread.current)")
+    }
+    print("end at thread \(Thread.current)")
+}
+//nestQueue8()
+func nestQueue9() { // 任務順序為： start -> end -> task1 -> interrupted
+    print("\n=============\(#function)================")
+    print("start at thread \(Thread.current)")
+    
+    let queue = DispatchQueue.main
+    queue.async { // 雖異步，但仍然是使用主執行緒，因為主執行緒上不會額外開啟線程。
+        print("\(#function) task1 thread at \(Thread.current)")
+        queue.sync { // 會等待方法執行完成，才會執行，在執行完 task1 就停止往下執行，也沒發生error(?)，
+            // 實際應該是有鎖死，當同時執行 nestQueue9 及 nestQueue10 時，nestQueue10就會因為9中斷在task1 執行而不會執行後續任務。
+            //sleep(2)。
+            print("task2 thread at \(Thread.current)")
+        }
+        
+        print("task3 thread at \(Thread.current)")
+    }
+    // 這邊也執行到，推估是因為前次任務為異步，因此不會阻塞任務進行。
+    print("end at thread \(Thread.current)")
+}
+nestQueue9()
+
+func nestQueue10() { // 完成任務順序為： start -> end -> task1 -> task3 -> task2
+    print("\n=============\(#function)================")
+    print("start at thread \(Thread.current)")
+    
+    let queue = DispatchQueue.main
+    queue.async { // 執行異步不阻塞主執行緒，會等待方法完成才執行
+        print("task1 thread at \(Thread.current)")
+        queue.async { // 執行異步不阻塞主執行緒，會等待外層異步完成才執行
+            //sleep(2)
+            print("task2 thread at \(Thread.current)")
+        }
+        
+        print("task3 thread at \(Thread.current)")
+    }
+    print("end at thread \(Thread.current)")
+}
+nestQueue10()
+
+// MARK: - 自行擴充 swift 的 dispatch_once 功能
+extension DispatchQueue {
+    
+    private static var tokenTracker: [String] = []
+    class func once(file: String = #file, function: String = #function, line: Int = #line, block: () -> Void) {
+        
+        let token = file + ":" + function + ":" + String(line)
+        once(token: token, block: block)
+    }
+    
+    class func once(token: String, block: () -> Void) {
+        objc_sync_enter(self)
+        defer {
+            objc_sync_exit(self)
+        }
+        
+        if tokenTracker.contains(token) {
+            return
+        }
+        
+        tokenTracker.append(token)
+        block()
+    }
+}
+
+func doSomthingOnce() {
+    
+    var anArray: [Int] = []
+    
+    for i in 0 ..< 5 {
+        DispatchQueue.once {
+            anArray.append(i)
+        }
+    }
+    print(anArray)
+}
+
+doSomthingOnce()
+
+// MARK: - 簡易實現 objc 中的 @synchronized 效果
+// 自定義一個方法
+func synchronized(lock object: AnyObject, closure: () -> Void) {
+    objc_sync_enter(object)
+    closure()
+    objc_sync_exit(object)
+}
+
+// MARK: - 藉由並行隊列執行快速迭代，會使用到主線程以及其他線程，並且無順序去遍歷陣列裡的元素
+let iterationArr = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+DispatchQueue.concurrentPerform(iterations: iterationArr.count) { index in
+    print("iterations index: \(iterationArr[index]) at thread \(Thread.current)")
+}
+print("central iterations")
+DispatchQueue.concurrentPerform(iterations: iterationArr.count) { index in
+    print("iterations index: \(iterationArr[index]) at thread \(Thread.current)")
+}
+
 
